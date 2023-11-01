@@ -12,7 +12,7 @@ CORS(app, supports_credentials=True)
 
 
 def get_db_connection():
-    return MySQLdb.connect(host='127.0.0.1', user='jflanag5', passwd='g6Mz_jj8}]A.]{e-', db='course_crafter')
+    return MySQLdb.connect(host='course-crafter.cbzvp1yumkcc.us-east-2.rds.amazonaws.com', user='jflanag5', passwd='goirish!', db='course_crafter')
 
 
 @app.route('/api/update', methods=['POST'])
