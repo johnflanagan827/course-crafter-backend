@@ -8,7 +8,7 @@ app = Flask(__name__)
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'
 
 jwt = JWTManager(app)
-CORS(app, supports_credentials=True)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
 
 def get_db_connection():
