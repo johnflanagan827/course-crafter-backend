@@ -51,6 +51,43 @@ def create_account():
         return jsonify({"msg": "User already exists"}), 400
 
 
+@app.route('/api/updateAccount', methods=['PUT'])
+@jwt_required()
+def update_account():
+    data = request.json
+    new_password = data['password']
+    username = get_jwt_identity()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE users SET password_hash = (%s) WHERE username = (%s)", (new_password, username,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        response = jsonify({"msg": "Account updated successfully!"}), 200
+        return response
+    except:
+        return jsonify({"msg": "An error occurred"}), 400
+
+
+@app.route('/api/deleteAccount', methods=['DELETE'])
+@jwt_required()
+def delete_account():
+    username = get_jwt_identity()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM users WHERE username = (%s)", (username,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        response = jsonify({"msg": "Account deleted successfully!"}), 200
+        return response
+    except:
+        return jsonify({"msg": "An error occurred"}), 400
+
 @app.route('/api/login', methods=['POST'])
 def login():
     if not request.is_json:
