@@ -50,6 +50,7 @@ def create_account():
     except:
         return jsonify({"msg": "User already exists"}), 400
 
+
 @app.route('/api/login', methods=['POST'])
 def login():
     if not request.is_json:
@@ -69,12 +70,32 @@ def login():
         if password_hash != password:
             return jsonify({"msg": "invalid password"}), 400
     else:
-        return jsonify({"msg": "User not found"}), 400
+        return jsonify({"msg": "User not found"}), 404
 
     cursor.close()
     conn.close()
 
     return jsonify({"msg": "Login success", "access_token": access_token}), 200
+
+
+@app.route('/api/search', methods=['GET'])
+def search():
+    search = request.headers.get('search')
+    capitalized_search = ' '.join(word.capitalize() for word in search.split())
+
+    search_pattern = "%" + capitalized_search + "%"
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT course_name FROM course WHERE course_name like (%s)", (search_pattern,))
+        result = cursor.fetchall()
+        if result:
+            return jsonify(result), 200
+        else:
+            return jsonify({"msg": "Classes not found"}), 404
+    except:
+        return jsonify({"msg": "Classes not found"}), 404
 
 
 @app.route('/api/protected', methods=['GET'])
