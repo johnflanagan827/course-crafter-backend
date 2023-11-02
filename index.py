@@ -3,6 +3,7 @@ from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
 import pymysql as MySQLdb
+import bcrypt
 
 app = Flask(__name__)
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'
@@ -37,10 +38,14 @@ def create_account():
     username = data['username']
     password = data['password']
 
+    if len(password) < 8:
+        return jsonify({"msg": "Password must be at least 8 characters"}), 400
+
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, password))
+        cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, hashed_password))
         conn.commit()
         cursor.close()
         conn.close()
@@ -56,12 +61,13 @@ def create_account():
 def update_account():
     data = request.json
     new_password = data['password']
+    hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
     username = get_jwt_identity()
 
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE users SET password_hash = (%s) WHERE username = (%s)", (new_password, username,))
+        cursor.execute("UPDATE users SET password_hash = (%s) WHERE username = (%s)", (hashed_password, username,))
         conn.commit()
         cursor.close()
         conn.close()
@@ -88,6 +94,7 @@ def delete_account():
     except:
         return jsonify({"msg": "An error occurred"}), 400
 
+
 @app.route('/api/login', methods=['POST'])
 def login():
     if not request.is_json:
@@ -104,8 +111,8 @@ def login():
 
     if result:
         password_hash = result[0]
-        if password_hash != password:
-            return jsonify({"msg": "invalid password"}), 400
+        if not bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
+            return jsonify({"msg": "Invalid password"}), 400
     else:
         return jsonify({"msg": "User not found"}), 404
 
@@ -133,12 +140,6 @@ def search():
             return jsonify({"msg": "Classes not found"}), 404
     except:
         return jsonify({"msg": "Classes not found"}), 404
-
-
-@app.route('/api/protected', methods=['GET'])
-@jwt_required()
-def protected():
-    return jsonify({"msg": f"You have access to this endpoint! {get_jwt_identity()}"})
 
 
 if __name__ == '__main__':

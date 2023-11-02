@@ -3,3 +3,4 @@ Flask_Cors==4.0.0
 Flask_JWT_Extended==4.5.3
 PyMySQL==1.1.0
 Werkzeug==2.2.2
+bcrypt==3.2.0
