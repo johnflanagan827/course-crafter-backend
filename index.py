@@ -135,11 +135,201 @@ def search():
         cursor.execute("SELECT course_name FROM course WHERE course_name like (%s)", (search_pattern,))
         result = cursor.fetchall()
         if result:
+            cursor.close()
+            conn.close()
             return jsonify(result), 200
         else:
             return jsonify({"msg": "Classes not found"}), 404
     except:
         return jsonify({"msg": "Classes not found"}), 404
+
+
+@app.route('/api/csClasses', methods=['GET'])
+def cs_classes():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ComputerScienceClasses")
+        courses = cursor.fetchall()
+
+        course_dict = {"AP/Summer": {"name": "AP/Summer", "items": []}}
+        for course in courses:
+            class_id, class_name, credits, semester, is_fixed, attribute = course
+
+            if semester not in course_dict:
+                course_dict[semester] = {
+                    "name": semester,
+                    "items": []
+                }
+
+            course_dict[semester]["items"].append({
+                "id": str(class_id),
+                "content": class_name,
+                "credits": int(credits),
+                "isFixed": bool(is_fixed),
+                "attribute": attribute
+            })
+
+        if course_dict:
+            return jsonify(course_dict), 200
+        else:
+            return jsonify({"msg": "No courses found"}), 404
+    except Exception as e:
+        return jsonify({"msg": str(e)}), 500
+    finally:
+        cursor.close()
+
+
+def find_entry_with_least_credits(task_status):
+    min_credits = float('inf')
+    semester_with_min_credits = None
+
+    for semester, data in task_status.items():
+        total_credits = sum(item['credits'] for item in data['items'])
+        if total_credits < min_credits:
+            min_credits = total_credits
+            semester_with_min_credits = semester
+
+    return semester_with_min_credits
+
+
+@app.route('/api/getConcentrations', methods=['GET'])
+def get_concentrations():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT ConcentrationID, ConcentrationName FROM Concentrations")
+        concentrations = cursor.fetchall()
+        concentration_list = [{'id': cid, 'name': name} for cid, name in concentrations]
+        return jsonify(concentration_list), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/updateConcentration', methods=['POST'])
+def update_concentration():
+    data = request.get_json()
+    task_status = data.get('taskStatus')
+    concentration_id = data.get('concentrationId')
+
+    if not task_status or concentration_id is None:
+        return jsonify({'error': 'Missing taskStatus or concentrationId'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Retrieve original CS curriculum classes
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed FROM ComputerScienceClasses")
+        cs_classes = cursor.fetchall()
+        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed)} for class_id, class_name, credits, _, is_fixed in cs_classes}
+
+        # Update task_status with original CS curriculum
+        for semester_data in task_status.values():
+            for item in semester_data['items']:
+                if item['id'] in cs_class_dict:
+                    item.update(cs_class_dict[item['id']])
+
+        # Handle the selected concentration
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed FROM ConcentrationClasses WHERE ConcentrationID = %s", (concentration_id,))
+        concentration_classes = cursor.fetchall()
+
+        if concentration_classes:
+            for class_id, class_name, credits, semester, is_fixed in concentration_classes:
+                found = False
+                for semester_name, semester_data in task_status.items():
+                    for item in semester_data['items']:
+                        if item['id'] == str(class_id):
+                            item.update({'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed)})
+                            found = True
+                            break
+                    if found:
+                        break
+
+                if not found:
+                    semester_with_least_credits = find_entry_with_least_credits(task_status)
+                    task_status[semester_with_least_credits]['items'].append({
+                        'id': str(class_id),
+                        'content': class_name,
+                        'credits': credits,
+                        'isFixed': bool(is_fixed)
+                    })
+
+        return jsonify(task_status), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/getMinors', methods=['GET'])
+def get_minors():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT minorID, minorName FROM Minors")
+        minors = cursor.fetchall()
+        minor_list = [{'id': mid, 'name': name} for mid, name in minors]
+        return jsonify(minor_list), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/updateMinors', methods=['POST'])
+def update_minors():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        task_status = request.json.get('taskStatus')
+        minor_id = request.json.get('minorId')  # ID of the minor
+
+        # Remove entries with ID outside the range of 1-41
+        for semester in task_status.values():
+            semester['items'] = [item for item in semester['items'] if 1 <= int(item['id']) <= 41]
+
+        # Remove entries with ID 26 and 36 if their name is "Technical Elective"
+        for semester in task_status.values():
+            semester['items'] = [item for item in semester['items'] if not (item['id'] in ['26', '36'] and item['content'] == "Technical Elective")]
+
+        # Fetch classes associated with the minor
+        cursor.execute("SELECT classID, className, credits, isFixed FROM MinorClasses WHERE minorID = %s", (minor_id,))
+        minor_classes = cursor.fetchall()
+
+        # Update the task status with classes from the selected minor
+        for class_id, class_name, credits, is_fixed in minor_classes:
+            # Check if the class with ID 26 or 36 already exists and is not "Technical Elective"
+            existing_classes = [item for semester in task_status.values() for item in semester['items']]
+            if str(class_id) in ['26', '36'] and any(item['id'] == str(class_id) and item['content'] != "Technical Elective" for item in existing_classes):
+                continue  # Skip adding this class
+
+            semester_with_least_credits = find_entry_with_least_credits(task_status)
+            task_status[semester_with_least_credits]['items'].append({
+                'id': str(class_id),
+                'content': class_name,
+                'credits': credits,
+                'isFixed': bool(is_fixed)
+            })
+
+        # Return the updated task status
+        return jsonify(task_status), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 
 if __name__ == '__main__':
