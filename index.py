@@ -168,7 +168,8 @@ def cs_classes():
                 "content": class_name,
                 "credits": int(credits),
                 "isFixed": bool(is_fixed),
-                "attribute": attribute
+                "attribute": attribute,
+                "type": "Major",
             })
 
         if course_dict:
@@ -186,6 +187,8 @@ def find_entry_with_least_credits(task_status):
     semester_with_min_credits = None
 
     for semester, data in task_status.items():
+        if semester == 'AP/Summer':
+            continue
         total_credits = sum(item['credits'] for item in data['items'])
         if total_credits < min_credits:
             min_credits = total_credits
@@ -225,39 +228,59 @@ def update_concentration():
 
     try:
         # Retrieve original CS curriculum classes
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed FROM ComputerScienceClasses")
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ComputerScienceClasses")
         cs_classes = cursor.fetchall()
-        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed)} for class_id, class_name, credits, _, is_fixed in cs_classes}
-
-        # Update task_status with original CS curriculum
-        for semester_data in task_status.values():
+        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major"} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
+        # Update task_status for items with type 'Concentration'
+        for semester_name, semester_data in task_status.items():
+            updated_items = []
             for item in semester_data['items']:
-                if item['id'] in cs_class_dict:
-                    item.update(cs_class_dict[item['id']])
+                if item.get('type') == 'Concentration':
+                    if item['id'] in cs_class_dict:
+                        # Create a new item based on cs_class_dict but preserve the original 'id'
+                        new_item = cs_class_dict[item['id']].copy()  # Copy the item from cs_class_dict
+                        new_item['id'] = item['id']  # Preserve the original 'id'
+                        updated_items.append(new_item)
+                    # If the item id is not in cs_class_dict, it's not appended (effectively removed)
+                else:
+                    updated_items.append(item)  # Keep the item if it's not of 'Concentration' type
+
+            # Replace the items in the semester with the updated list
+            semester_data['items'] = updated_items
 
         # Handle the selected concentration
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed FROM ConcentrationClasses WHERE ConcentrationID = %s", (concentration_id,))
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ConcentrationClasses WHERE ConcentrationID = %s", (concentration_id,))
         concentration_classes = cursor.fetchall()
 
+        # Find the current max_id in task_status
+        max_id = max(int(item['id']) for semester_data in task_status.values() for item in semester_data['items'] if 'id' in item)
+
         if concentration_classes:
-            for class_id, class_name, credits, semester, is_fixed in concentration_classes:
-                found = False
-                for semester_name, semester_data in task_status.items():
+            for _, class_name, credits, semester, is_fixed, attribute in concentration_classes:
+                class_found = False
+
+                # Check for an existing class in task_status with a matching 'content'
+                for semester_data in task_status.values():
                     for item in semester_data['items']:
-                        if item['id'] == str(class_id):
-                            item.update({'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed)})
-                            found = True
+                        if item['content'] == attribute:
+                            # Replace the first instance found
+                            item.update({'id': item['id'], 'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed), 'type': 'Concentration'})
+                            class_found = True
                             break
-                    if found:
+                    if class_found:
                         break
 
-                if not found:
+                # If the class was not found, add it to the semester with the least credits
+                if not class_found:
+                    max_id += 1
                     semester_with_least_credits = find_entry_with_least_credits(task_status)
                     task_status[semester_with_least_credits]['items'].append({
-                        'id': str(class_id),
+                        'id': str(max_id),
                         'content': class_name,
                         'credits': credits,
-                        'isFixed': bool(is_fixed)
+                        'isFixed': bool(is_fixed),
+                        'attribute': attribute,
+                        'type': 'Concentration',
                     })
 
         return jsonify(task_status), 200
@@ -286,43 +309,81 @@ def get_minors():
         conn.close()
 
 
+
 @app.route('/api/updateMinors', methods=['POST'])
 def update_minors():
+    data = request.get_json()
+    task_status = data.get('taskStatus')
+    concentration_id = data.get('minorId')
+
+    if not task_status or concentration_id is None:
+        return jsonify({'error': 'Missing taskStatus or minorId'}), 400
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        task_status = request.json.get('taskStatus')
-        minor_id = request.json.get('minorId')  # ID of the minor
+        # Retrieve original CS curriculum classes
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ComputerScienceClasses")
+        cs_classes = cursor.fetchall()
+        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major"} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
+        # Update task_status for items with type 'Minor'
+        for semester_name, semester_data in task_status.items():
+            updated_items = []
+            for item in semester_data['items']:
+                if item.get('type') == 'Minor':
+                    if item['id'] in cs_class_dict:
+                        # Create a new item based on cs_class_dict but preserve the original 'id'
+                        new_item = cs_class_dict[item['id']].copy()  # Copy the item from cs_class_dict
+                        new_item['id'] = item['id']  # Preserve the original 'id'
+                        updated_items.append(new_item)
+                    # If the item id is not in cs_class_dict, it's not appended (effectively removed)
+                else:
+                    updated_items.append(item)  # Keep the item if it's not of 'Concentration' type
 
-        # Remove entries with ID outside the range of 1-41
-        for semester in task_status.values():
-            semester['items'] = [item for item in semester['items'] if 1 <= int(item['id']) <= 41]
+            # Replace the items in the semester with the updated list
+            semester_data['items'] = updated_items
 
-        # Remove entries with ID 26 and 36 if their name is "Technical Elective"
-        for semester in task_status.values():
-            semester['items'] = [item for item in semester['items'] if not (item['id'] in ['26', '36'] and item['content'] == "Technical Elective")]
-
-        # Fetch classes associated with the minor
-        cursor.execute("SELECT classID, className, credits, isFixed FROM MinorClasses WHERE minorID = %s", (minor_id,))
+        # Handle the selected concentration
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute, CountsFor FROM MinorClasses WHERE minorID = %s", (concentration_id,))
         minor_classes = cursor.fetchall()
 
-        # Update the task status with classes from the selected minor
-        for class_id, class_name, credits, is_fixed in minor_classes:
-            # Check if the class with ID 26 or 36 already exists and is not "Technical Elective"
-            existing_classes = [item for semester in task_status.values() for item in semester['items']]
-            if str(class_id) in ['26', '36'] and any(item['id'] == str(class_id) and item['content'] != "Technical Elective" for item in existing_classes):
-                continue  # Skip adding this class
+        # Find the current max_id in task_status
+        max_id = max(int(item['id']) for semester_data in task_status.values() for item in semester_data['items'] if 'id' in item)
 
-            semester_with_least_credits = find_entry_with_least_credits(task_status)
-            task_status[semester_with_least_credits]['items'].append({
-                'id': str(class_id),
-                'content': class_name,
-                'credits': credits,
-                'isFixed': bool(is_fixed)
-            })
+        if minor_classes:
+            for _, class_name, credits, semester, is_fixed, attribute, counts_for in minor_classes:
+                class_found = False
 
-        # Return the updated task status
+                # Check for an existing class in task_status with a matching 'content'
+                if counts_for:
+                    for cls in counts_for.split(','):
+                        print(cls)
+                        for semester_data in task_status.values():
+                            for item in semester_data['items']:
+                                if item['content'] == cls:
+                                    # Replace the first instance found
+                                    item.update({'id': item['id'], 'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed), 'type': 'Minor'})
+                                    class_found = True
+                                    break
+                            if class_found:
+                                break
+                        if class_found:
+                            break
+
+                # If the class was not found, add it to the semester with the least credits
+                if not class_found:
+                    max_id += 1
+                    semester_with_least_credits = find_entry_with_least_credits(task_status)
+                    task_status[semester_with_least_credits]['items'].append({
+                        'id': str(max_id),
+                        'content': class_name,
+                        'credits': credits,
+                        'isFixed': bool(is_fixed),
+                        'attribute': attribute,
+                        'type': 'Minor',
+                    })
+
         return jsonify(task_status), 200
 
     except Exception as e:
