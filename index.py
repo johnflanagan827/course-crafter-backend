@@ -54,6 +54,26 @@ def create_account():
         return response
     except:
         return jsonify({"msg": "User already exists"}), 400
+    
+@app.route('/api/rating', methods=['POST'])
+def submit_rating():
+    data = request.json
+    course = data['course'][0]
+    difficulty = data['difficulty']
+    hours = data['hours']
+    grade = data['grade']
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO ratings (course_name, difficulty, hours, grade) VALUES (%s, %s, %s, %s)", (course, difficulty, hours, grade))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        response = make_response(jsonify({"message": "Data inserted successfully", "course": course, "difficulty": difficulty, "hours": hours, "grade": grade}))
+        return response
+    except Exception as e:
+        print(e)
+        return jsonify({"msg": "Insert Failed"}), 400
 
 
 @app.route('/api/updateAccount', methods=['PUT'])
