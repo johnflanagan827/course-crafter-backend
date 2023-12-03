@@ -76,6 +76,25 @@ def submit_rating():
         return jsonify({"msg": "Insert Failed"}), 400
 
 
+@app.route('/api/course_details', methods=['GET'])
+def getCourseDetails():
+    print('hi')
+    data = course = request.args.get('course')
+    course = data
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT course_name, subject, description, instructor FROM course WHERE course_name = %s", (course,))
+        result = cursor.fetchall()
+        if result:
+            cursor.close()
+            conn.close()
+            return jsonify(result), 200
+        else:
+            return jsonify({"msg": "Classes not found"}), 404
+    except:
+        return jsonify({"msg": "Classes not found"}), 404
+    
 @app.route('/api/updateAccount', methods=['PUT'])
 @jwt_required()
 def update_account():
@@ -142,9 +161,11 @@ def login():
     return jsonify({"msg": "Login success", "access_token": access_token}), 200
 
 
+
 @app.route('/api/search', methods=['GET'])
 def search():
     search = request.headers.get('search')
+    print('hi')
     capitalized_search = ' '.join(word.capitalize() for word in search.split())
 
     search_pattern = "%" + capitalized_search + "%"
