@@ -165,7 +165,6 @@ def login():
 @app.route('/api/search', methods=['GET'])
 def search():
     search = request.headers.get('search')
-    print('hi')
     capitalized_search = ' '.join(word.capitalize() for word in search.split())
 
     search_pattern = "%" + capitalized_search + "%"
@@ -174,6 +173,22 @@ def search():
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT course_name FROM course WHERE course_name like (%s)", (search_pattern,))
+        result = cursor.fetchall()
+        if result:
+            cursor.close()
+            conn.close()
+            return jsonify(result), 200
+        else:
+            return jsonify({"msg": "Classes not found"}), 404
+    except:
+        return jsonify({"msg": "Classes not found"}), 404
+
+@app.route('/api/reqClasses', methods=['GET'])
+def req_classes():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT course_name, AVG(difficulty) AS average_difficulty, (SELECT hours FROM ( SELECT hours, COUNT(*) AS hour_count FROM ratings WHERE course_name = t.course_name GROUP BY hours ORDER BY hour_count DESC LIMIT 1 ) AS subquery) AS most_common_hour, (SELECT grade FROM ( SELECT grade, COUNT(*) AS grade_count FROM ratings WHERE course_name = t.course_name GROUP BY grade ORDER BY grade_count DESC LIMIT 1 ) AS subquery) AS most_common_grade FROM ratings t GROUP BY course_name;")
         result = cursor.fetchall()
         if result:
             cursor.close()
