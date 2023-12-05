@@ -199,43 +199,6 @@ def req_classes():
         return jsonify({"msg": "Classes not found"}), 404
 
 
-# @app.route('/api/csClasses', methods=['GET'])
-# def cs_classes():
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-#
-#     try:
-#         cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification='Major'")
-#         courses = cursor.fetchall()
-#
-#         course_dict = {"AP/Summer": {"name": "AP/Summer", "items": []}}
-#         for course in courses:
-#             class_id, class_name, credits, semester, is_fixed, attribute = course
-#             if semester not in course_dict:
-#                 course_dict[semester] = {
-#                     "name": semester,
-#                     "items": []
-#                 }
-#
-#             course_dict[semester]["items"].append({
-#                 "id": str(class_id),
-#                 "content": class_name,
-#                 "credits": int(credits),
-#                 "isFixed": bool(is_fixed),
-#                 "attribute": attribute,
-#                 "type": "Major",
-#             })
-#
-#         if course_dict:
-#             return jsonify(course_dict), 200
-#         else:
-#             return jsonify({"msg": "No courses found"}), 404
-#     except Exception as e:
-#         return jsonify({"msg": str(e)}), 500
-#     finally:
-#         cursor.close()
-
-
 def find_entry_with_least_credits(task_status):
     min_credits = float('inf')
     semester_with_min_credits = None
@@ -257,9 +220,12 @@ def get_concentrations():
     cursor = conn.cursor()
 
     try:
-        cursor.execute("SELECT ConcentrationID, ConcentrationName FROM Concentrations")
+        cursor.execute("SELECT DISTINCT ConcentrationName FROM Classes WHERE ConcentrationName IS NOT NULL;")
         concentrations = cursor.fetchall()
-        concentration_list = [{'id': cid, 'name': name} for cid, name in concentrations]
+        concentration_list = [{'id': 0, 'name': 'None'}]
+        for index, concentration in enumerate(concentrations, start=1):
+            concentration_list.append({'id': index, 'name': concentration[0]})
+
         return jsonify(concentration_list), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -268,24 +234,24 @@ def get_concentrations():
         conn.close()
 
 
-@app.route('/api/updateConcentration', methods=['POST'])
-def update_concentration():
+@app.route('/api/updateConcentrations', methods=['POST'])
+def update_concentrations():
     data = request.get_json()
     task_status = data.get('taskStatus')
-    concentration_id = data.get('concentrationId')
+    concentration_name = data.get('concentrationName')
 
-    if not task_status or concentration_id is None:
-        return jsonify({'error': 'Missing taskStatus or concentrationId'}), 400
+    if not task_status or concentration_name is None:
+        return jsonify({'error': 'Missing taskStatus or concentrationName'}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
         # Retrieve original CS curriculum classes
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes")
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification = 'Major'")
         cs_classes = cursor.fetchall()
-        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major"} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
-        # Update task_status for items with type 'Concentration'
+        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major", 'minorName': None, 'concentrationName': None} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
+        # Update task_status for items with type 'Minor'
         for semester_name, semester_data in task_status.items():
             updated_items = []
             for item in semester_data['items']:
@@ -295,7 +261,7 @@ def update_concentration():
                         new_item = cs_class_dict[item['id']].copy()  # Copy the item from cs_class_dict
                         new_item['id'] = item['id']  # Preserve the original 'id'
                         updated_items.append(new_item)
-                    # If the item id is not in cs_class_dict, it's not appended (effectively removed)
+                # If the item id is not in cs_class_dict, it's not appended (effectively removed)
                 else:
                     updated_items.append(item)  # Keep the item if it's not of 'Concentration' type
 
@@ -303,26 +269,30 @@ def update_concentration():
             semester_data['items'] = updated_items
 
         # Handle the selected concentration
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ConcentrationClasses WHERE ConcentrationID = %s", (concentration_id,))
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute, CountsFor FROM Classes WHERE ConcentrationName = %s", (concentration_name,))
         concentration_classes = cursor.fetchall()
 
         # Find the current max_id in task_status
         max_id = max(int(item['id']) for semester_data in task_status.values() for item in semester_data['items'] if 'id' in item)
 
         if concentration_classes:
-            for _, class_name, credits, semester, is_fixed, attribute in concentration_classes:
+            for _, class_name, credits, semester, is_fixed, attribute, counts_for in concentration_classes:
                 class_found = False
 
                 # Check for an existing class in task_status with a matching 'content'
-                for semester_data in task_status.values():
-                    for item in semester_data['items']:
-                        if item['content'] == attribute:
-                            # Replace the first instance found
-                            item.update({'id': item['id'], 'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed), 'type': 'Concentration'})
-                            class_found = True
+                if counts_for:
+                    for cls in counts_for.split(','):
+                        for semester_data in task_status.values():
+                            for item in semester_data['items']:
+                                if item['content'] == cls:
+                                    # Replace the first instance found
+                                    item.update({'id': item['id'], 'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed), 'type': 'Concentration', 'minorName': None, 'concentrationName': concentration_name})
+                                    class_found = True
+                                    break
+                            if class_found:
+                                break
+                        if class_found:
                             break
-                    if class_found:
-                        break
 
                 # If the class was not found, add it to the semester with the least credits
                 if not class_found:
@@ -335,6 +305,8 @@ def update_concentration():
                         'isFixed': bool(is_fixed),
                         'attribute': attribute,
                         'type': 'Concentration',
+                        'minor_name': None,
+                        'concentrationName': concentration_name,
                     })
 
         return jsonify(task_status), 200
@@ -382,7 +354,7 @@ def update_minors():
         # Retrieve original CS curriculum classes
         cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification = 'Major'")
         cs_classes = cursor.fetchall()
-        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major"} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
+        cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major", 'minorName': None, 'concentrationName': None} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
         # Update task_status for items with type 'Minor'
         for semester_name, semester_data in task_status.items():
             updated_items = []
@@ -418,7 +390,7 @@ def update_minors():
                             for item in semester_data['items']:
                                 if item['content'] == cls:
                                     # Replace the first instance found
-                                    item.update({'id': item['id'], 'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed), 'type': 'Minor'})
+                                    item.update({'id': item['id'], 'content': class_name, 'credits': credits, 'isFixed': bool(is_fixed), 'type': 'Minor', 'minorName': minor_name, 'concentrationName': None})
                                     class_found = True
                                     break
                             if class_found:
@@ -437,6 +409,8 @@ def update_minors():
                         'isFixed': bool(is_fixed),
                         'attribute': attribute,
                         'type': 'Minor',
+                        'minorName': minor_name,
+                        'concentrationName': None,
                     })
 
         return jsonify(task_status), 200
@@ -490,17 +464,17 @@ def get_schedule():
         schedule_id = schedule_id_row[0]
 
         # Get associated classes and semesters
-        cursor.execute("SELECT ClassID, Semester FROM ScheduleClasses WHERE ScheduleID = %s;", (schedule_id,))
+        cursor.execute("SELECT ClassID, Semester, ClassName, MinorName, ConcentrationName FROM ScheduleClasses WHERE ScheduleID = %s;", (schedule_id,))
         schedule_classes = cursor.fetchall()
 
         task_status = {"ScheduleName": schedule_name, "AP/Summer": {"name": "AP/Summer", "items": []}}
-        for class_id, semester in schedule_classes:
+        for class_id, semester, class_name, minor_name, concentration_name in schedule_classes:
             # Fetch class details
-            cursor.execute("SELECT ClassName, Credits, IsFixed, Attribute, Classification, CountsFor, MinorName FROM Classes WHERE ClassID = %s;", (class_id,))
+            cursor.execute("SELECT Credits, IsFixed, Attribute, Classification, CountsFor FROM Classes WHERE ClassID = %s;", (class_id,))
             class_info = cursor.fetchone()
 
             if class_info:
-                class_name, credits, is_fixed, attribute, classification, counts_for, minor_name = class_info
+                credits, is_fixed, attribute, classification, counts_for = class_info
 
                 if semester not in task_status:
                     task_status[semester] = {"name": semester, "items": []}
@@ -514,7 +488,8 @@ def get_schedule():
                     "attribute": attribute,
                     "type": classification,
                     "countsFor": counts_for,
-                    "minorName": minor_name
+                    "minorName": minor_name,
+                    "concentrationName": concentration_name,
                 })
 
         return jsonify(task_status), 200
@@ -558,14 +533,14 @@ def create_schedule():
                 "isFixed": bool(is_fixed),
                 "attribute": attribute,
                 "type": "Major",
+                "concentrationName": None,
+                "minorName": None,
             }
             task_status[semester]["items"].append(class_item)
 
-            # Prepare data for bulk insert
-            insert_values.append((schedule_id, class_id, semester))
+            insert_values.append((schedule_id, class_id, semester, class_name))
 
-        # Bulk insert into ScheduleClasses
-        cursor.executemany("INSERT INTO ScheduleClasses (ScheduleID, ClassID, Semester) VALUES (%s, %s, %s);", insert_values)
+        cursor.executemany("INSERT INTO ScheduleClasses (ScheduleID, ClassID, Semester, ClassName) VALUES (%s, %s, %s, %s);", insert_values)
 
         conn.commit()
         return jsonify(task_status), 200
@@ -576,7 +551,6 @@ def create_schedule():
 
     finally:
         cursor.close()
-
 
 
 @app.route('/api/saveSchedule', methods=['PUT'])
@@ -604,8 +578,12 @@ def save_schedule():
         for semester, classes_info in task_status.items():
             for class_info in classes_info.get('items', []):
                 class_id = class_info.get('id')
-                cursor.execute("INSERT INTO ScheduleClasses (ScheduleID, ClassID, Semester) VALUES (%s, %s, %s);",
-                               (schedule_id, class_id, semester))
+                class_name = class_info.get('content')
+                minor_name = class_info.get('minorName')
+                concentration_name = class_info.get('concentrationName')
+
+                cursor.execute("INSERT INTO ScheduleClasses (ScheduleID, ClassID, Semester, ClassName, MinorName, ConcentrationName) VALUES (%s, %s, %s, %s, %s, %s);",
+                               (schedule_id, class_id, semester, class_name, minor_name, concentration_name))
 
         conn.commit()
         return {"message": "Schedule saved successfully"}, 200
