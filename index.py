@@ -72,7 +72,6 @@ def submit_rating():
         response = make_response(jsonify({"message": "Data inserted successfully", "course": course, "difficulty": difficulty, "hours": hours, "grade": grade}))
         return response
     except Exception as e:
-        print(e)
         return jsonify({"msg": "Insert Failed"}), 400
 
 
@@ -164,42 +163,41 @@ def search():
         return jsonify({"msg": "Classes not found"}), 404
 
 
-@app.route('/api/csClasses', methods=['GET'])
-def cs_classes():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ComputerScienceClasses")
-        courses = cursor.fetchall()
-
-        course_dict = {"AP/Summer": {"name": "AP/Summer", "items": []}}
-        for course in courses:
-            class_id, class_name, credits, semester, is_fixed, attribute = course
-
-            if semester not in course_dict:
-                course_dict[semester] = {
-                    "name": semester,
-                    "items": []
-                }
-
-            course_dict[semester]["items"].append({
-                "id": str(class_id),
-                "content": class_name,
-                "credits": int(credits),
-                "isFixed": bool(is_fixed),
-                "attribute": attribute,
-                "type": "Major",
-            })
-
-        if course_dict:
-            return jsonify(course_dict), 200
-        else:
-            return jsonify({"msg": "No courses found"}), 404
-    except Exception as e:
-        return jsonify({"msg": str(e)}), 500
-    finally:
-        cursor.close()
+# @app.route('/api/csClasses', methods=['GET'])
+# def cs_classes():
+#     conn = get_db_connection()
+#     cursor = conn.cursor()
+#
+#     try:
+#         cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification='Major'")
+#         courses = cursor.fetchall()
+#
+#         course_dict = {"AP/Summer": {"name": "AP/Summer", "items": []}}
+#         for course in courses:
+#             class_id, class_name, credits, semester, is_fixed, attribute = course
+#             if semester not in course_dict:
+#                 course_dict[semester] = {
+#                     "name": semester,
+#                     "items": []
+#                 }
+#
+#             course_dict[semester]["items"].append({
+#                 "id": str(class_id),
+#                 "content": class_name,
+#                 "credits": int(credits),
+#                 "isFixed": bool(is_fixed),
+#                 "attribute": attribute,
+#                 "type": "Major",
+#             })
+#
+#         if course_dict:
+#             return jsonify(course_dict), 200
+#         else:
+#             return jsonify({"msg": "No courses found"}), 404
+#     except Exception as e:
+#         return jsonify({"msg": str(e)}), 500
+#     finally:
+#         cursor.close()
 
 
 def find_entry_with_least_credits(task_status):
@@ -248,7 +246,7 @@ def update_concentration():
 
     try:
         # Retrieve original CS curriculum classes
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ComputerScienceClasses")
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes")
         cs_classes = cursor.fetchall()
         cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major"} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
         # Update task_status for items with type 'Concentration'
@@ -318,9 +316,12 @@ def get_minors():
     cursor = conn.cursor()
 
     try:
-        cursor.execute("SELECT minorID, minorName FROM Minors")
+        cursor.execute("SELECT DISTINCT MinorName FROM Classes WHERE MinorName IS NOT NULL;")
         minors = cursor.fetchall()
-        minor_list = [{'id': mid, 'name': name} for mid, name in minors]
+        minor_list = [{'id': 0, 'name': 'None'}]
+        for index, minor in enumerate(minors, start=1):
+            minor_list.append({'id': index, 'name': minor[0]})
+
         return jsonify(minor_list), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -329,22 +330,21 @@ def get_minors():
         conn.close()
 
 
-
 @app.route('/api/updateMinors', methods=['POST'])
 def update_minors():
     data = request.get_json()
     task_status = data.get('taskStatus')
-    concentration_id = data.get('minorId')
+    minor_name = data.get('minorName')
 
-    if not task_status or concentration_id is None:
-        return jsonify({'error': 'Missing taskStatus or minorId'}), 400
+    if not task_status or minor_name is None:
+        return jsonify({'error': 'Missing taskStatus or minorName'}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
         # Retrieve original CS curriculum classes
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM ComputerScienceClasses")
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification = 'Major'")
         cs_classes = cursor.fetchall()
         cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major"} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
         # Update task_status for items with type 'Minor'
@@ -357,7 +357,7 @@ def update_minors():
                         new_item = cs_class_dict[item['id']].copy()  # Copy the item from cs_class_dict
                         new_item['id'] = item['id']  # Preserve the original 'id'
                         updated_items.append(new_item)
-                    # If the item id is not in cs_class_dict, it's not appended (effectively removed)
+                # If the item id is not in cs_class_dict, it's not appended (effectively removed)
                 else:
                     updated_items.append(item)  # Keep the item if it's not of 'Concentration' type
 
@@ -365,7 +365,7 @@ def update_minors():
             semester_data['items'] = updated_items
 
         # Handle the selected concentration
-        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute, CountsFor FROM MinorClasses WHERE minorID = %s", (concentration_id,))
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute, CountsFor FROM Classes WHERE MinorName = %s", (minor_name,))
         minor_classes = cursor.fetchall()
 
         # Find the current max_id in task_status
@@ -378,7 +378,6 @@ def update_minors():
                 # Check for an existing class in task_status with a matching 'content'
                 if counts_for:
                     for cls in counts_for.split(','):
-                        print(cls)
                         for semester_data in task_status.values():
                             for item in semester_data['items']:
                                 if item['content'] == cls:
@@ -408,6 +407,120 @@ def update_minors():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/getScheduleNames', methods=['GET'])
+@jwt_required()
+def get_schedule_names():
+    username = get_jwt_identity()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT ScheduleName FROM Schedules WHERE Username = (%s);", (username,))
+        schedule_names = cursor.fetchall()
+
+        if not schedule_names:
+            return jsonify([]), 200
+
+        schedules_name_list = [name[0] for name in schedule_names]
+
+        return jsonify(schedules_name_list), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/createSchedule', methods=['POST'])
+@jwt_required()
+def create_schedule():
+    username = get_jwt_identity()
+    data = request.get_json()
+    schedule_name = data.get('ScheduleName')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT ScheduleName FROM Schedules WHERE Username = (%s);", (username,))
+        schedule_names = cursor.fetchall()
+
+        if schedule_names:
+            schedules_name_list = [name[0] for name in schedule_names]
+            if schedule_name in schedules_name_list:
+                return jsonify({"error": "Schedule name must be unique"}), 500
+
+        # insert username/schedule_name into database
+        # cursor.execute("INSERT INTO Schedules (Username, ScheduleName) VALUES (%s, %s)", (username, schedule_name,))
+
+        cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification='Major'")
+        courses = cursor.fetchall()
+
+        course_dict = {"ScheduleName": schedule_name, "AP/Summer": {"name": "AP/Summer", "items": []}}
+        for course in courses:
+            class_id, class_name, credits, semester, is_fixed, attribute = course
+            if semester not in course_dict:
+                course_dict[semester] = {
+                    "name": semester,
+                    "items": []
+                }
+
+            course_dict[semester]["items"].append({
+                "id": str(class_id),
+                "content": class_name,
+                "credits": int(credits),
+                "isFixed": bool(is_fixed),
+                "attribute": attribute,
+                "type": "Major",
+            })
+
+
+        if course_dict:
+            return jsonify(course_dict), 200
+        else:
+            return jsonify({"msg": "No courses found"}), 404
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"msg": str(e)}), 500
+    finally:
+        cursor.close()
+
+
+@app.route('/api/saveSchedule', methods=['PUT'])
+@jwt_required()
+def save_schedule():
+    username = get_jwt_identity()
+    data = request.get_json()
+    schedule_name = data.get('ScheduleName')
+    task_status = data.get('taskStatus')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT ScheduleID FROM Schedules WHERE ScheduleName = %s AND UserName = %s;", (schedule_name, username))
+        schedule_id_row = cursor.fetchone()
+        if schedule_id_row is None:
+            raise ValueError("Schedule not found")
+
+        schedule_id = schedule_id_row[0]
+
+        for semester, classes_info in task_status.items():
+            for class_info in classes_info.get('items', []):
+                class_id = class_info.get('id')
+                cursor.execute("INSERT INTO ScheduleClasses (ScheduleID, ClassID, Semester) VALUES (%s, %s, %s);",
+                               (schedule_id, class_id, semester))
+
+        conn.commit()
+        return {"message": "Schedule saved successfully"}, 200
+
+    except Exception as e:
+        conn.rollback()
+        return {"error": str(e)}, 500
+
     finally:
         cursor.close()
         conn.close()
