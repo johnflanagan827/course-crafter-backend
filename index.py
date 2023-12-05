@@ -238,6 +238,7 @@ def get_concentrations():
 def update_concentrations():
     data = request.get_json()
     task_status = data.get('taskStatus')
+    print(task_status)
     concentration_name = data.get('concentrationName')
 
     if not task_status or concentration_name is None:
@@ -251,7 +252,7 @@ def update_concentrations():
         cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification = 'Major'")
         cs_classes = cursor.fetchall()
         cs_class_dict = {str(class_id): {"content": class_name, "credits": credits, "isFixed": bool(is_fixed), "attribute": attribute, "type": "Major", 'minorName': None, 'concentrationName': None} for class_id, class_name, credits, semester, is_fixed, attribute in cs_classes}
-        # Update task_status for items with type 'Minor'
+        # Update task_status for items with type 'Concentration'
         for semester_name, semester_data in task_status.items():
             updated_items = []
             for item in semester_data['items']:
@@ -470,14 +471,20 @@ def get_schedule():
         task_status = {"ScheduleName": schedule_name, "AP/Summer": {"name": "AP/Summer", "items": []}}
         for class_id, semester, class_name, minor_name, concentration_name in schedule_classes:
             # Fetch class details
-            cursor.execute("SELECT Credits, IsFixed, Attribute, Classification, CountsFor FROM Classes WHERE ClassID = %s;", (class_id,))
+            cursor.execute("SELECT Credits, IsFixed, Attribute, CountsFor FROM Classes WHERE ClassID = %s;", (class_id,))
             class_info = cursor.fetchone()
 
             if class_info:
-                credits, is_fixed, attribute, classification, counts_for = class_info
+                credits, is_fixed, attribute, counts_for = class_info
 
                 if semester not in task_status:
                     task_status[semester] = {"name": semester, "items": []}
+
+                classification = "Major"
+                if minor_name:
+                    classification = "Minor"
+                elif concentration_name:
+                    classification = "Concentration"
 
                 # Append class info to the corresponding semester
                 task_status[semester]["items"].append({
