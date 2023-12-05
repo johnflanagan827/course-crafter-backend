@@ -472,6 +472,61 @@ def get_schedule_names():
         conn.close()
 
 
+@app.route('/api/getSchedule', methods=['GET'])
+@jwt_required()
+def get_schedule():
+    username = get_jwt_identity()
+    schedule_name = request.args.get('scheduleName')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Get ScheduleID
+        cursor.execute("SELECT ScheduleID FROM Schedules WHERE ScheduleName = %s AND UserName = %s;", (schedule_name, username))
+        schedule_id_row = cursor.fetchone()
+        if schedule_id_row is None:
+            return jsonify({"msg": "Schedule not found"}), 404
+
+        schedule_id = schedule_id_row[0]
+
+        # Get associated classes and semesters
+        cursor.execute("SELECT ClassID, Semester FROM ScheduleClasses WHERE ScheduleID = %s;", (schedule_id,))
+        schedule_classes = cursor.fetchall()
+
+        task_status = {"ScheduleName": schedule_name, "AP/Summer": {"name": "AP/Summer", "items": []}}
+        for class_id, semester in schedule_classes:
+            # Fetch class details
+            cursor.execute("SELECT ClassName, Credits, IsFixed, Attribute, Classification, CountsFor, MinorName FROM Classes WHERE ClassID = %s;", (class_id,))
+            class_info = cursor.fetchone()
+
+            if class_info:
+                class_name, credits, is_fixed, attribute, classification, counts_for, minor_name = class_info
+
+                if semester not in task_status:
+                    task_status[semester] = {"name": semester, "items": []}
+
+                # Append class info to the corresponding semester
+                task_status[semester]["items"].append({
+                    "id": str(class_id),
+                    "content": class_name,
+                    "credits": int(credits),
+                    "isFixed": bool(is_fixed),
+                    "attribute": attribute,
+                    "type": classification,
+                    "countsFor": counts_for,
+                    "minorName": minor_name
+                })
+
+        return jsonify(task_status), 200
+
+    except Exception as e:
+        return jsonify({"msg": str(e)}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @app.route('/api/createSchedule', methods=['POST'])
 @jwt_required()
 def create_schedule():
@@ -482,48 +537,46 @@ def create_schedule():
     cursor = conn.cursor()
 
     try:
-        cursor.execute("SELECT ScheduleName FROM Schedules WHERE Username = (%s);", (username,))
-        schedule_names = cursor.fetchall()
+        cursor.execute("INSERT INTO Schedules (Username, ScheduleName) VALUES (%s, %s)", (username, schedule_name))
+        schedule_id = cursor.lastrowid
 
-        if schedule_names:
-            schedules_name_list = [name[0] for name in schedule_names]
-            if schedule_name in schedules_name_list:
-                return jsonify({"error": "Schedule name must be unique"}), 500
-
-        # insert username/schedule_name into database
-        # cursor.execute("INSERT INTO Schedules (Username, ScheduleName) VALUES (%s, %s)", (username, schedule_name,))
-
+        # Fetch major classes and prepare bulk insert data
         cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification='Major'")
         courses = cursor.fetchall()
 
-        course_dict = {"ScheduleName": schedule_name, "AP/Summer": {"name": "AP/Summer", "items": []}}
+        task_status = {"AP/Summer": {"name": "AP/Summer", "items": []}, "ScheduleName": schedule_name}
+        insert_values = []
         for course in courses:
             class_id, class_name, credits, semester, is_fixed, attribute = course
-            if semester not in course_dict:
-                course_dict[semester] = {
-                    "name": semester,
-                    "items": []
-                }
+            if semester not in task_status:
+                task_status[semester] = {"name": semester, "items": []}
 
-            course_dict[semester]["items"].append({
+            class_item = {
                 "id": str(class_id),
                 "content": class_name,
                 "credits": int(credits),
                 "isFixed": bool(is_fixed),
                 "attribute": attribute,
                 "type": "Major",
-            })
+            }
+            task_status[semester]["items"].append(class_item)
 
+            # Prepare data for bulk insert
+            insert_values.append((schedule_id, class_id, semester))
 
-        if course_dict:
-            return jsonify(course_dict), 200
-        else:
-            return jsonify({"msg": "No courses found"}), 404
+        # Bulk insert into ScheduleClasses
+        cursor.executemany("INSERT INTO ScheduleClasses (ScheduleID, ClassID, Semester) VALUES (%s, %s, %s);", insert_values)
+
+        conn.commit()
+        return jsonify(task_status), 200
+
     except Exception as e:
         conn.rollback()
         return jsonify({"msg": str(e)}), 500
+
     finally:
         cursor.close()
+
 
 
 @app.route('/api/saveSchedule', methods=['PUT'])
@@ -544,6 +597,10 @@ def save_schedule():
 
         schedule_id = schedule_id_row[0]
 
+        # Delete existing schedule classes for this schedule_id
+        cursor.execute("DELETE FROM ScheduleClasses WHERE ScheduleID = %s;", (schedule_id,))
+
+        # Insert new schedule classes
         for semester, classes_info in task_status.items():
             for class_info in classes_info.get('items', []):
                 class_id = class_info.get('id')
@@ -552,6 +609,41 @@ def save_schedule():
 
         conn.commit()
         return {"message": "Schedule saved successfully"}, 200
+
+    except Exception as e:
+        conn.rollback()
+        return {"error": str(e)}, 500
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/deleteSchedule', methods=['DELETE'])
+@jwt_required()
+def delete_schedule():
+    username = get_jwt_identity()
+    schedule_name = request.args.get('scheduleName')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Get ScheduleID
+        cursor.execute("SELECT ScheduleID FROM Schedules WHERE ScheduleName = %s AND UserName = %s;", (schedule_name, username))
+        schedule_id_row = cursor.fetchone()
+        if schedule_id_row is None:
+            raise ValueError("Schedule not found")
+
+        schedule_id = schedule_id_row[0]
+
+        # Delete schedule classes associated with this schedule_id
+        cursor.execute("DELETE FROM ScheduleClasses WHERE ScheduleID = %s;", (schedule_id,))
+
+        # Delete the schedule itself
+        cursor.execute("DELETE FROM Schedules WHERE ScheduleID = %s;", (schedule_id,))
+
+        conn.commit()
+        return {"message": "Schedule deleted successfully"}, 200
 
     except Exception as e:
         conn.rollback()
