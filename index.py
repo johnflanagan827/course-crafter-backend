@@ -49,8 +49,8 @@ def create_account():
         conn.commit()
         cursor.close()
         conn.close()
-        response = make_response(jsonify({"message": "Data inserted successfully", "username": username, "password": password}))
-        response.set_cookie('username', 'test')
+        access_token = create_access_token(identity=username)
+        response = jsonify({"msg": "Login success", "access_token": access_token}), 200
         return response
     except:
         return jsonify({"msg": "User already exists"}), 400
@@ -93,44 +93,73 @@ def getCourseDetails():
             return jsonify({"msg": "Classes not found"}), 404
     except:
         return jsonify({"msg": "Classes not found"}), 404
-    
+
+
 @app.route('/api/updateAccount', methods=['PUT'])
 @jwt_required()
 def update_account():
     data = request.json
+    current_password = data['current_password']
     new_password = data['password']
-    hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
     username = get_jwt_identity()
 
     conn = get_db_connection()
     cursor = conn.cursor()
+
     try:
-        cursor.execute("UPDATE users SET password_hash = (%s) WHERE username = (%s)", (hashed_password, username,))
-        conn.commit()
+        # Fetch the existing password hash from the database
+        cursor.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+        password_hash = cursor.fetchone()[0]
+
+        # Check if the current password is correct
+        if bcrypt.checkpw(current_password.encode('utf-8'), password_hash.encode('utf-8')):
+            # Hash the new password
+            hashed_new_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+            # Update the password in the database
+            cursor.execute("UPDATE users SET password_hash = %s WHERE username = %s", (hashed_new_password, username))
+            conn.commit()
+            response = jsonify({"msg": "Account updated successfully!"}), 200
+        else:
+            response = jsonify({"msg": "Current password is incorrect"}), 400
+
+    except Exception as e:
+        print(e)  # Log the error for debugging
+        response = jsonify({"msg": "An error occurred"}), 400
+
+    finally:
         cursor.close()
         conn.close()
-        response = jsonify({"msg": "Account updated successfully!"}), 200
-        return response
-    except:
-        return jsonify({"msg": "An error occurred"}), 400
+
+    return response
 
 
 @app.route('/api/deleteAccount', methods=['DELETE'])
 @jwt_required()
 def delete_account():
     username = get_jwt_identity()
-
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute(
+            "DELETE FROM ScheduleClasses WHERE scheduleId IN (SELECT scheduleid FROM Schedules WHERE username = %s)",
+            (username,)
+        )
+        cursor.execute(
+            "DELETE FROM Schedules WHERE username = %s",
+            (username,)
+        )
+
         cursor.execute("DELETE FROM users WHERE username = (%s)", (username,))
         conn.commit()
-        cursor.close()
-        conn.close()
         response = jsonify({"msg": "Account deleted successfully!"}), 200
         return response
-    except:
-        return jsonify({"msg": "An error occurred"}), 400
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"msg": str(e)}), 400
+    finally:
+        cursor.close()
+        conn.close()
 
 
 @app.route('/api/login', methods=['POST'])
@@ -468,7 +497,18 @@ def get_schedule():
         cursor.execute("SELECT ClassID, Semester, ClassName, MinorName, ConcentrationName FROM ScheduleClasses WHERE ScheduleID = %s;", (schedule_id,))
         schedule_classes = cursor.fetchall()
 
-        task_status = {"ScheduleName": schedule_name, "AP/Summer": {"name": "AP/Summer", "items": []}}
+        task_status = {
+            "Freshman Fall": {"name": "Freshman Fall", "items": []},
+            "Freshman Spring": {"name": "Freshman Spring", "items": []},
+            "Sophomore Fall": {"name": "Sophomore Fall", "items": []},
+            "Sophomore Spring": {"name": "Sophomore Spring", "items": []},
+            "Junior Fall": {"name": "Junior Fall", "items": []},
+            "Junior Spring": {"name": "Junior Spring", "items": []},
+            "Senior Fall": {"name": "Senior Fall", "items": []},
+            "Senior Spring": {"name": "Senior Spring", "items": []},
+            "AP/Summer": {"name": "AP/Summer", "items": []},
+            "ScheduleName": schedule_name}
+
         for class_id, semester, class_name, minor_name, concentration_name in schedule_classes:
             # Fetch class details
             cursor.execute("SELECT Credits, IsFixed, Attribute, CountsFor FROM Classes WHERE ClassID = %s;", (class_id,))
@@ -526,7 +566,18 @@ def create_schedule():
         cursor.execute("SELECT ClassID, ClassName, Credits, Semester, IsFixed, Attribute FROM Classes WHERE Classification='Major'")
         courses = cursor.fetchall()
 
-        task_status = {"AP/Summer": {"name": "AP/Summer", "items": []}, "ScheduleName": schedule_name}
+        task_status = {
+            "Freshman Fall": {"name": "Freshman Fall", "items": []},
+            "Freshman Spring": {"name": "Freshman Spring", "items": []},
+            "Sophomore Fall": {"name": "Sophomore Fall", "items": []},
+            "Sophomore Spring": {"name": "Sophomore Spring", "items": []},
+            "Junior Fall": {"name": "Junior Fall", "items": []},
+            "Junior Spring": {"name": "Junior Spring", "items": []},
+            "Senior Fall": {"name": "Senior Fall", "items": []},
+            "Senior Spring": {"name": "Senior Spring", "items": []},
+            "AP/Summer": {"name": "AP/Summer", "items": []},
+            "ScheduleName": schedule_name}
+
         insert_values = []
         for course in courses:
             class_id, class_name, credits, semester, is_fixed, attribute = course
